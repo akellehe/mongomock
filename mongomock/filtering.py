@@ -5,7 +5,6 @@ from six import iteritems, string_types
 from sentinels import NOTHING
 from .helpers import ObjectId, RE_TYPE
 
-
 def filter_applies(search_filter, document):
     """
     This function implements MongoDB's matching strategy over documents in the find() method and other
@@ -20,16 +19,13 @@ def filter_applies(search_filter, document):
 
         is_match = False
 
-        if isinstance(search, dict) and '$ne' in search and len(iter_key_candidates(key, document)) == 0:
-            continue
-
         for doc_val in iter_key_candidates(key, document):
             if isinstance(search, dict):
                 is_match = all(
                     operator_string in OPERATOR_MAP and OPERATOR_MAP[operator_string] (doc_val, search_val) or
                     operator_string == '$not' and _not_op(document, key, search_val)
                     for operator_string, search_val in iteritems(search)
-                ) or doc_val == search
+                )
             elif isinstance(search, RE_TYPE) and isinstance(doc_val, (string_types, list)):
                 is_match = _regex(doc_val, search)
             elif key in LOGICAL_OPERATOR_MAP:
@@ -129,6 +125,11 @@ def _elem_match_op(doc_val, query):
 
 def _regex(doc_val, regex):
     return any(regex.search(item) for item in _force_list(doc_val))
+
+def _print_deprecation_warning(old_param_name, new_param_name):
+    warnings.warn("'%s' has been deprecated to be in line with pymongo implementation, "
+                  "a new parameter '%s' should be used instead. the old parameter will be kept for backward "
+                  "compatibility purposes." % old_param_name, new_param_name, DeprecationWarning)
 
 OPERATOR_MAP = {'$ne': operator.ne,
                 '$gt': _not_nothing_and(operator.gt),

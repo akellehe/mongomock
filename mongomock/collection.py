@@ -8,17 +8,12 @@ import warnings
 from sentinels import NOTHING
 from .filtering import filter_applies, iter_key_candidates
 from . import ObjectId, OperationFailure, DuplicateKeyError
-from .helpers import basestring, xrange, print_deprecation_warning
-
-try:
-    from collections import OrderedDict
-except ImportError:
-    from ordereddict import OrderedDict
+from .helpers import basestring, xrange
 
 try:
     # Optional requirements for providing Map-Reduce functionality
     import execjs
-except ImportError:
+except ImportError:     
     execjs = None
 
 try:
@@ -41,8 +36,7 @@ class Collection(object):
         self.name = name
         self.full_name = "{0}.{1}".format(db.name, name)
         self._Collection__database = db
-        self._documents = OrderedDict()
-        self._uniques = []
+        self._documents = {}
 
     def __repr__(self):
         return "Collection({0}, '{1}')".format(self._Collection__database, self.name)
@@ -69,15 +63,6 @@ class Collection(object):
         object_id = data['_id']
         if object_id in self._documents:
             raise DuplicateKeyError("Duplicate Key Error", 11000)
-        for unique in self._uniques:
-            find_kwargs = {}
-            for key, direction in unique:
-                if key in data:
-                    find_kwargs[key] = data[key]
-            answer = self.find(spec=find_kwargs)
-            if answer.count() > 0:
-                raise DuplicateKeyError("Duplicate Key Error", 11000)
-
         self._documents[object_id] = self._internalize_dict(data)
         return object_id
 
@@ -94,14 +79,11 @@ class Collection(object):
         updated_existing = False
         num_updated = 0
         for existing_document in itertools.chain(self._iter_documents(spec), [None]):
-            # we need was_insert for the setOnInsert update operation
-            was_insert = False
             # the sentinel document means we should do an upsert
             if existing_document is None:
                 if not upsert:
                     continue
                 existing_document = self._documents[self._insert(self._discard_operators(spec))]
-                was_insert = True
             else:
                 updated_existing = True
             num_updated += 1
@@ -110,26 +92,7 @@ class Collection(object):
             subdocument = None
             for k, v in iteritems(document):
                 if k == '$set':
-                    positional = False
-                    for key in iterkeys(v):
-                        if '$' in key:
-                            positional = True
-                            break
-                    if positional:
-                        subdocument = self._update_document_fields_positional(existing_document,v, spec, _set_updater, subdocument)
-                        continue
-
                     self._update_document_fields(existing_document, v, _set_updater)
-                elif k == '$setOnInsert':
-                    if not was_insert:
-                        continue
-                    positional = any('$' in key for key in iterkeys(v))
-                    if positional:
-                        # we use _set_updater
-                        subdocument = self._update_document_fields_positional(existing_document,v, spec, _set_updater, subdocument)
-                    else:
-                        self._update_document_fields(existing_document, v, _set_updater)                 
-
                 elif k == '$unset':
                     for field, value in iteritems(v):
                         if self._has_key(existing_document, field):
@@ -154,12 +117,8 @@ class Collection(object):
                     for field, value in iteritems(v):
                         nested_field_list = field.rsplit('.')
                         if len(nested_field_list) == 1:
-                            if field in existing_document:
-                                arr = existing_document[field]
-                                if isinstance(value, dict):
-                                    existing_document[field] = [obj for obj in arr if not filter_applies(value, obj)]
-                                else:
-                                    existing_document[field] = [obj for obj in arr if not value == obj]
+                            arr = existing_document[field]
+                            existing_document[field] = [obj for obj in arr if not obj == value]
                             continue
 
                         # nested fields includes a positional element
@@ -197,9 +156,10 @@ class Collection(object):
                                     continue
                             existing_document[field].append(value)
                             continue
+
                         # nested fields includes a positional element
                         # need to find that element
-                        elif '$' in nested_field_list:
+                        if '$' in nested_field_list:
                             if not subdocument:
                                 subdocument = self._get_subdocument(existing_document, spec, nested_field_list)
 
@@ -220,25 +180,6 @@ class Collection(object):
                                 push_results.append(value)
 
                             # cannot write to doc directly as it doesn't save to existing_document
-                            subdocument[nested_field_list[-1]] = push_results
-                        # push to array in a nested attribute
-                        else:
-                            # create nested attributes if they do not exist
-                            subdocument = existing_document
-                            for field in nested_field_list[:-1]:
-                                if field not in subdocument:
-                                    subdocument[field] = {}
-
-                                subdocument = subdocument[field]
-
-                            # we're pushing a list
-                            push_results = []
-                            if nested_field_list[-1] in subdocument:
-                                # if the list exists, then use that list
-                                push_results = subdocument[nested_field_list[-1]]
-
-                            push_results.append(value)
-
                             subdocument[nested_field_list[-1]] = push_results
                 else:
                     if first:
@@ -315,7 +256,7 @@ class Collection(object):
 
     def find(self, spec = None, fields = None, filter = None, sort = None, timeout = True, limit = 0, snapshot = False, as_class = None, skip = 0, slave_okay=False):
         if filter is not None:
-            print_deprecation_warning('filter', 'spec')
+            _print_deprecation_warning('filter', 'spec')
             if spec is None:
                 spec = filter
         if as_class is None:
@@ -412,23 +353,15 @@ class Collection(object):
                     subspec = spec
                     for part in field_name_parts[:-1]:
                         if part == '$':
-                            subspec = subspec.get('$elemMatch', subspec)
+                            subspec = subspec['$elemMatch']
                             for item in current_doc:
                                 if filter_applies(subspec, item):
                                     current_doc = item
                                     break
                             continue
 
-                        new_spec = {}
-                        for el in subspec:
-                            if el.startswith(part):
-                                if len(el.split(".")) > 1:
-                                    new_spec[".".join(el.split(".")[1:])] = subspec[el]
-                                else:
-                                    new_spec = subspec[el]
-                        subspec = new_spec
+                        subspec = subspec[part]
                         current_doc = current_doc[part]
-
                     subdocument = current_doc
                 updater(subdocument, field_name_parts[-1], v)
                 continue
@@ -444,10 +377,7 @@ class Collection(object):
                 return # mongodb skips such cases
             if isinstance(doc, list):
                 try:
-                    if part == '$':
-                        doc = doc[0]
-                    else:
-                        doc = doc[int(part)]
+                    doc = doc[int(part)]
                     continue
                 except ValueError:
                     pass
@@ -470,7 +400,7 @@ class Collection(object):
         except StopIteration:
             return None
 
-    def find_and_modify(self, query = {}, update = None, upsert = False, sort = None, **kwargs):
+    def find_and_modify(self, query = {}, update = None, upsert = False, **kwargs):
         remove = kwargs.get("remove", False)
         if kwargs.get("new", False) and remove:
             raise OperationFailure("remove and returnNew can't co-exist") # message from mongodb
@@ -478,7 +408,7 @@ class Collection(object):
         if remove and update is not None:
             raise ValueError("Can't do both update and remove")
 
-        old = self.find_one(query, sort=sort)
+        old = self.find_one(query)
         if not old:
             if upsert:
                 old = {'_id':self.insert(query)}
@@ -505,10 +435,10 @@ class Collection(object):
                         manipulate, safe, _check_keys = True, **kwargs)
             return to_save.get("_id", None)
 
-    def remove(self, spec_or_id = None, search_filter = None):
+    def remove(self, spec_or_id = None, search_filter = None, write_concern=None):
         """Remove objects matching spec_or_id from the collection."""
         if search_filter is not None:
-            print_deprecation_warning('search_filter', 'spec_or_id')
+            _print_deprecation_warning('search_filter', 'spec_or_id')
         if spec_or_id is None:
             spec_or_id = search_filter if search_filter else {}
         if not isinstance(spec_or_id, dict):
@@ -533,15 +463,14 @@ class Collection(object):
         self._documents = {}
 
     def ensure_index(self, key_or_list, cache_for = 300, **kwargs):
-        if 'unique' in kwargs and kwargs['unique']:
-            self._uniques.append(helpers._index_list(key_or_list))
+        pass
 
     def drop_index(self, index_or_name):
         pass
 
     def index_information(self):
         return {}
-
+		
     def map_reduce(self, map_func, reduce_func, out, full_response=False, query=None, limit=0):
         if execjs is None:
             raise NotImplementedError(
@@ -568,7 +497,7 @@ class Collection(object):
                         mapped_key = '$oid' + key['$oid'];
                     }
                     else {
-                        mapped_key = key;
+                        mapped_key = key; 
                     }
                     if(!mappedDict[mapped_key]) {
                         mappedDict[mapped_key] = [];
@@ -641,17 +570,12 @@ class Collection(object):
         return self.find().distinct(key)
 
     def group(self, key, condition, initial, reduce, finalize=None):
-        if execjs is None:
-            raise NotImplementedError(
-                "PyExecJS is required in order to use group. "
-                "Use 'pip install pyexecjs pymongo' to support group mock."
-            )
         reduce_ctx = execjs.compile("""
             function doReduce(fnc, docList) {
                 reducer = eval('('+fnc+')');
                 for(var i=0, l=docList.length; i<l; i++) {
                     try {
-                        reducedVal = reducer(docList[i-1], docList[i]);
+                        reducedVal = reducer(docList[i-1], docList[i]); 
                     }
                     catch (err) {
                         continue;
@@ -767,22 +691,6 @@ class Collection(object):
                     out_collection = out_collection[v:]
                 elif k == '$limit':
                     out_collection = out_collection[:v]
-                elif k == '$unwind':
-                    if not isinstance(v, basestring) and v[0] != '$':
-                        raise ValueError("$unwind failed: exception: field path references must be prefixed with a '$' ('%s'"%str(v))
-                    if len(v.split('.')) > 1:
-                        raise NotImplementedError('Mongmock does not currently support nested field paths in the $unwind implementation. ("%s"'%v)
-                    unwound_collection = []
-                    for doc in out_collection:
-                        array_value = doc.get(v[1:])
-                        if array_value in (None, []):
-                            continue
-                        elif not isinstance(array_value, list):
-                            raise TypeError('$unwind must specify an array field, field: "%s", value found: %s'%(str(v),str(array_value)))
-                        for field_item in array_value:
-                            unwound_collection.append(copy.deepcopy(doc))
-                            unwound_collection[-1][v[1:]] = field_item
-                    out_collection = unwound_collection
                 else:
                     if k in pipeline_operators:
                         raise NotImplementedError(
@@ -866,18 +774,20 @@ class Cursor(object):
         for x in iter(self._dataset):
             value = _resolve_key(key, x)
             if value == NOTHING: continue
-            unique.update(value if isinstance(value, (tuple, list)) else [value])
-        return list(unique)
+            unique.add(value)
+        self._dataset = (x for x in unique)
+        return self 
 
     def __getitem__(self, index):
         arr = [x for x in self._dataset]
         count = len(arr)
         self._dataset = iter(arr)
+        rval = arr[index]
+        if isinstance(arr[index], list):
+            return iter(arr[index])
         return arr[index]
 
 def _set_updater(doc, field_name, value):
-    if isinstance(value, (tuple, list)):
-        value = copy.deepcopy(value)
     if isinstance(doc, dict):
         doc[field_name] = value
 

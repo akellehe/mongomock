@@ -1,13 +1,5 @@
-import re
 import sys
-import warnings
-
-
-def print_deprecation_warning(old_param_name, new_param_name):
-    warnings.warn("'%s' has been deprecated to be in line with pymongo implementation, "
-                  "a new parameter '%s' should be used instead. the old parameter will be kept for backward "
-                  "compatibility purposes." % old_param_name, new_param_name, DeprecationWarning)
-
+import re
 
 _PY2 = sys.version_info < (3, 0)
 
@@ -30,23 +22,6 @@ except NameError:
   unicode = str
   basestring = (str, bytes)
 
-
-ASCENDING = 1
-
-
-def _index_list(key_or_list, direction=None):
-    """Helper to generate a list of (key, direction) pairs.
-       Takes such a list, or a single key, or a single key and direction.
-    """
-    if direction is not None:
-        return [(key_or_list, direction)]
-    else:
-        if isinstance(key_or_list, basestring):
-            return [(key_or_list, ASCENDING)]
-        elif not isinstance(key_or_list, (list, tuple)):
-            raise TypeError("if no direction is specified, "
-                            "key_or_list must be an instance of list")
-    return key_or_list
 
   
 def _fields_list_to_dict(fields):
